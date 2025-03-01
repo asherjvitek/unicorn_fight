@@ -21,7 +21,8 @@
 
 #define ROCKS_LENGTH 300
 #define PLAYER_SPEED 10
-#define PLAYER_SIZE 25
+#define PLAYER_WIDTH 80
+#define PLAYER_HEIGHT 65
 #define ROCK_SIZE 50
 #define ROCK_INACTIVE_POS -1
 
@@ -38,7 +39,7 @@ static int screenWidth = 1920;
 static int screenHeight = 1080;
 static const int deathMoveSpeed = 8;
 
-static Rectangle player = {0, 0, 0, 0};
+static Rectangle player = {0, 0, PLAYER_WIDTH, PLAYER_HEIGHT};
 static Rock rocks[ROCKS_LENGTH] = {0};
 static int rateOfNewDeath = 20;
 
@@ -106,8 +107,6 @@ void InitGame(void) {
 
     player.x = screenWidth / 2;
     player.y = screenHeight / 2;
-    player.height = PLAYER_SIZE;
-    player.width = PLAYER_SIZE;
 
     for (int i = 0; i < ROCKS_LENGTH; i++) {
 
@@ -192,7 +191,7 @@ void DrawGame(void) {
 
     if (!gameOver) {
 
-        DrawRectangleRec(player, RED);
+        DrawTexture(unicorn, player.x, player.y, WHITE);
 
         for (int i = 0; i < ROCKS_LENGTH; i++) {
             Rock ds = rocks[i];
@@ -216,7 +215,6 @@ void UnloadGame(void) {
 
 // Update and Draw (one frame)
 void UpdateDrawFrame(void) {
-    DrawTexture(unicorn, 25, 25, WHITE);
     UpdateGame();
     DrawGame();
 }
