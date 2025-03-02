@@ -51,7 +51,7 @@ RAYLIB_H_INSTALL_PATH ?= $(DESTDIR)/include
 RAYLIB_LIBTYPE        ?= STATIC
 
 # Build mode for project: DEBUG or RELEASE
-BUILD_MODE            ?= DEBUG
+BUILD_MODE            ?= RELEASE
 
 # Use external GLFW library instead of rglfw module
 # TODO: Review usage on Linux. Target version of choice. Switch on -lglfw or -lglfw3
@@ -377,7 +377,8 @@ ifeq ($(PLATFORM),PLATFORM_WEB)
 endif
 
 # Define all source files required
-SAMPLES = unicorn_fight
+SAMPLES = \
+	unicorn_fight \
 
 # typing 'make' will invoke the default target entry
 all: $(SAMPLES)

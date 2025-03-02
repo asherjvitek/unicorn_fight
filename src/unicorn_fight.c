@@ -13,39 +13,84 @@
  ********************************************************************************************/
 
 #include "raylib.h"
+#include "raymath.h"
+#include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #if defined(PLATFORM_WEB)
 #include <emscripten/emscripten.h>
 #endif
 
-#define ROCKS_LENGTH 300
+#define FRAME_RATE 60
+
+// How many pixels the player can move per frame
 #define PLAYER_SPEED 10
+// this is the height the player image
 #define PLAYER_WIDTH 80
 #define PLAYER_HEIGHT 65
-#define ROCK_SIZE 50
-#define ROCK_INACTIVE_POS -1
 
-#define AXIS_DEADZONE .03f
+#define ROCKS_LENGTH 25
+#define ROCK_SIZE 50
+#define ROCK_SPEED 4
+#define SPAWN_RATE 80 // frames that pass until a new spawn
+
+//this one is for the kiddo. 
+#define ALLOW_LOSING false
+
+#define AXIS_DEADZONE .04f
+
+typedef struct {
+    Vector2 position;
+    Vector2 speed;
+    bool active;
+    bool punched;
+} Rock;
+
+typedef struct {
+    Vector2 a;
+    Vector2 b;
+    Vector2 c;
+} Triangle;
 
 typedef struct {
     Rectangle position;
-} Rock;
+    float rotation;
+    bool punch;
+    Triangle fist;
+} Player;
+
+Vector2 Vector2RotateAroundAxis(Vector2 pointToRotate, Vector2 rotationPoint, float angle) {
+    Vector2 translatedPoint = {pointToRotate.x - rotationPoint.x, pointToRotate.y - rotationPoint.y};
+    Vector2 rotatedPoint = Vector2Rotate(translatedPoint, angle);
+    Vector2 finalPoint = {rotatedPoint.x + rotationPoint.x, rotatedPoint.y + rotationPoint.y};
+
+    return finalPoint;
+}
+
+Triangle TriangleRotateAroundAxis(Triangle t, Vector2 axis, float angle) {
+    t.a = Vector2RotateAroundAxis(t.a, axis, angle);
+    t.b = Vector2RotateAroundAxis(t.b, axis, angle);
+    t.c = Vector2RotateAroundAxis(t.c, axis, angle);
+    return t;
+}
 
 //------------------------------------------------------------------------------------
 // Global Variables Declaration
 //------------------------------------------------------------------------------------
 static int screenWidth = 1920;
 static int screenHeight = 1080;
-static const int deathMoveSpeed = 8;
+static Vector2 screenMiddle = {0};
 
-static Rectangle player = {0, 0, PLAYER_WIDTH, PLAYER_HEIGHT};
+static Player player = {{0, 0, PLAYER_WIDTH, PLAYER_HEIGHT}, 0, false, (Triangle){(Vector2){0, 0}, (Vector2){0, 0}, (Vector2){0, 0}}};
 static Rock rocks[ROCKS_LENGTH] = {0};
-static int rateOfNewDeath = 20;
 
 static int framesCounter = 0;
 static bool gameOver = false;
 static bool pause = false;
+static int score = 0;
+
+static int lastPunchFrame = 0;
 
 static Texture2D unicorn = {0};
 //------------------------------------------------------------------------------------
@@ -70,7 +115,7 @@ int main(void) {
 #if defined(PLATFORM_WEB)
     emscripten_set_main_loop(UpdateDrawFrame, 60, 1);
 #else
-    SetTargetFPS(60);
+    SetTargetFPS(FRAME_RATE);
     //--------------------------------------------------------------------------------------
 
     // Main game loop
@@ -101,16 +146,21 @@ void InitGame(void) {
     framesCounter = 0;
     gameOver = false;
     pause = false;
-    rateOfNewDeath = 20;
+    score = 0;
 
     unicorn = LoadTexture("./resources/unicorn.png");
 
-    player.x = screenWidth / 2;
-    player.y = screenHeight / 2;
+    player.position.x = screenWidth / 2.0f;
+    player.position.y = screenHeight / 2.0f;
+    player.rotation = 0;
+    player.punch = false;
+    lastPunchFrame = 0;
+
+    screenMiddle.x = player.position.x;
+    screenMiddle.y = player.position.y;
 
     for (int i = 0; i < ROCKS_LENGTH; i++) {
-
-        rocks[i] = (Rock){(Rectangle){ROCK_INACTIVE_POS, ROCK_INACTIVE_POS, ROCK_SIZE, ROCK_SIZE}};
+        rocks[i] = (Rock){(Vector2){0, 0}, {0, 0}, false, false};
     }
 }
 
@@ -124,46 +174,110 @@ void UpdateGame(void) {
 
         for (int i = 0; i < ROCKS_LENGTH; i++) {
             Rock ds = rocks[i];
-            if (CheckCollisionRecs(player, ds.position)) {
+            Rectangle pos = {player.position.x - PLAYER_WIDTH / 2.0f, player.position.y - PLAYER_HEIGHT / 2.0f, player.position.width, player.position.height};
+            if (ALLOW_LOSING && CheckCollisionCircleRec(ds.position, ROCK_SIZE, pos)) {
                 gameOver = true;
                 return;
             }
         }
 
+        // Player Move
         float x = GetGamepadAxisMovement(0, GAMEPAD_AXIS_LEFT_X);
         float y = GetGamepadAxisMovement(0, GAMEPAD_AXIS_LEFT_Y);
 
-        if (x > AXIS_DEADZONE || x < AXIS_DEADZONE * 0) player.x += x * PLAYER_SPEED;
-        if (y > AXIS_DEADZONE || y < AXIS_DEADZONE * 0) player.y += y * PLAYER_SPEED;
+        float xr = GetGamepadAxisMovement(0, GAMEPAD_AXIS_RIGHT_X);
+        float yr = GetGamepadAxisMovement(0, GAMEPAD_AXIS_RIGHT_Y);
 
-        // move the death squares
-        for (int i = 0; i < ROCKS_LENGTH; i++) {
-            Rock ds = rocks[i];
-            if (ds.position.x != ROCK_INACTIVE_POS && ds.position.y != ROCK_INACTIVE_POS) {
-                if (ds.position.y > screenHeight) {
-                    rocks[i].position.x = ROCK_INACTIVE_POS;
-                    rocks[i].position.y = ROCK_INACTIVE_POS;
-                    continue;
-                }
+        if ((xr > AXIS_DEADZONE || xr < -AXIS_DEADZONE) && (yr > AXIS_DEADZONE || yr < -AXIS_DEADZONE)) {
+            // printf("%f %f %f %f \n", xr, yr, atan2(xr, yr), atan2(xr, yr) * (180 / PI));
+            player.rotation = atan2(yr, xr) * (180 / PI);
+        }
 
-                rocks[i].position.y += deathMoveSpeed;
+        if (x > AXIS_DEADZONE || x < -AXIS_DEADZONE) player.position.x += x * PLAYER_SPEED;
+        if (y > AXIS_DEADZONE || y < -AXIS_DEADZONE) player.position.y += y * PLAYER_SPEED;
+
+        // Player Actions
+        // printf("%d %d\n", lastPunchFrame + FRAME_RATE * 10, framesCounter);
+        if (!player.punch || (lastPunchFrame + 10) < framesCounter) {
+            player.punch = false;
+            if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_TRIGGER_1)) {
+                player.punch = true;
+                lastPunchFrame = framesCounter;
             }
         }
 
-        if (rateOfNewDeath > 4 && framesCounter % 40 == 0) {
-            rateOfNewDeath--;
+        // calculate the position of the player's punch
+        if (player.punch) {
+            player.fist.a.x = player.position.x + PLAYER_WIDTH / 2.0f;
+            player.fist.a.y = player.position.y;
+            player.fist.b.x = player.fist.a.x + PLAYER_WIDTH * 2;
+            player.fist.b.y = player.fist.a.y + PLAYER_HEIGHT / 2.0f * 2;
+            player.fist.c.x = player.fist.a.x + PLAYER_WIDTH * 2;
+            player.fist.c.y = player.fist.a.y + (PLAYER_HEIGHT / 2.0f * -1) * 2;
+
+            Vector2 rotationPoint = {player.position.x, player.position.y};
+            player.fist = TriangleRotateAroundAxis(player.fist, rotationPoint, player.rotation * DEG2RAD);
         }
 
-        // spawn a new death square
-        // printf("%d\n", framesCounter);
-        if (framesCounter % rateOfNewDeath == 0) {
+        // Rocks Move
+        for (int i = 0; i < ROCKS_LENGTH; i++) {
+            Rock ds = rocks[i];
+            if (ds.active) {
+                // despawn the rock
+                if ((ds.speed.y > 0 && ds.position.y > screenHeight) || (ds.speed.y < 0 && ds.position.y < 0) || (ds.speed.x > 0 && ds.position.x > screenWidth) ||
+                    (ds.speed.x < 0 && ds.position.x < 0)) {
+                    rocks[i].active = false;
+                    rocks[i].punched = false;
+                    continue;
+                }
+
+                if (player.punch && ds.punched == false 
+                    && (CheckCollisionCircleLine(ds.position, ROCK_SIZE, player.fist.b, player.fist.c)
+                    || CheckCollisionCircleLine(ds.position, ROCK_SIZE, player.fist.a, player.fist.b)
+                    || CheckCollisionCircleLine(ds.position, ROCK_SIZE, player.fist.a, player.fist.c))) {
+                    rocks[i].speed.x = ROCK_SPEED * 4 * cos(atan2(yr, xr));
+                    rocks[i].speed.y = ROCK_SPEED * 4 * sin(atan2(yr, xr));
+                    rocks[i].punched = true;
+                    score++;
+                }
+
+                rocks[i].position.y += rocks[i].speed.y;
+                rocks[i].position.x += rocks[i].speed.x;
+            }
+        }
+
+        // Rock Spawn
+        if (framesCounter % SPAWN_RATE == 0) {
             int x = GetRandomValue(0, screenWidth);
+            int y = GetRandomValue(0, screenHeight);
+
+            // Get some variance in where the projectile is going to go.
+            int box = screenWidth / 4;
+            int varianceX = GetRandomValue(box * -1, box);
+            int varianceY = GetRandomValue(box * -1, box);
+
+            // target - projectile
+            int deltaX = (screenMiddle.x + varianceX) - x;
+            int deltaY = (screenMiddle.y + varianceY) - y;
+
+            float angle = atan2(deltaY, deltaX);
+
+            // move the rock off screen
+            while ((x > 0 && x < screenWidth) && (y > 0 && y < screenHeight)) {
+                x -= deltaX;
+                y -= deltaY;
+            }
 
             for (int i = 0; i < ROCKS_LENGTH; i++) {
-                Rock ds = rocks[i];
-                if (ds.position.x == ROCK_INACTIVE_POS && ds.position.y == ROCK_INACTIVE_POS) {
+                // find some inactive rock
+                if (!rocks[i].active) {
                     rocks[i].position.x = x;
-                    rocks[i].position.y = ROCK_INACTIVE_POS * ROCK_SIZE;
+                    rocks[i].position.y = y;
+                    rocks[i].active = true;
+
+                    // set the rock to go in the direction of the middle of the screen
+                    rocks[i].speed.x = ROCK_SPEED * cos(angle);
+                    rocks[i].speed.y = ROCK_SPEED * sin(angle);
 
                     // printf("New Death! %d %f, %f\n", i, ds.x, ds.y);
                     break;
@@ -191,15 +305,26 @@ void DrawGame(void) {
 
     if (!gameOver) {
 
-        DrawTexture(unicorn, player.x, player.y, WHITE);
-
         for (int i = 0; i < ROCKS_LENGTH; i++) {
             Rock ds = rocks[i];
 
-            if (ds.position.x != ROCK_INACTIVE_POS) {
-                DrawRectangleRec(ds.position, PINK);
+            if (ds.active) {
+                DrawCircleV(ds.position, ROCK_SIZE, PINK);
             }
         }
+
+        Vector2 origin = {PLAYER_WIDTH / 2.0f, PLAYER_HEIGHT / 2.0f};
+        Rectangle source = {0, 0, PLAYER_WIDTH, PLAYER_HEIGHT};
+        DrawTexturePro(unicorn, source, player.position, origin, player.rotation, WHITE);
+        if (player.punch) {
+            DrawTriangle(player.fist.a, player.fist.b, player.fist.c, RED);
+        }
+
+        char s[5] = "0000\0";
+
+        sprintf(s, "%0*d", 4, score);
+
+        DrawText(s, screenWidth - MeasureText(s, 40) - 4, 2, 40, GRAY);
 
         if (pause) DrawText("GAME PAUSED", screenWidth / 2 - MeasureText("GAME PAUSED", 40) / 2, screenHeight / 2 - 40, 40, GRAY);
     } else
@@ -211,6 +336,7 @@ void DrawGame(void) {
 // Unload game variables
 void UnloadGame(void) {
     // TODO: Unload all dynamic loaded data (textures, sounds, models...)
+    UnloadTexture(unicorn);
 }
 
 // Update and Draw (one frame)
